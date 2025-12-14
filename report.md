@@ -35,7 +35,7 @@
 
 ### Report Date
 
-
+2025-12-14
 
 ### HTB Candidate
 
@@ -92,11 +92,11 @@ All web-related findings were considered in-scope, as long as they can be proven
 
 ## Approach
 
-The tester performed the evaluation under a mixture of "blackbox" and a "whitebox" approach from the 5th of December 2025  to 8th of December 2025, as follows:
+The tester performed the evaluation under a mixture of "blackbox" and a "whitebox" approach from the 5th of December 2025  to 14th of December 2025, as follows:
 
 * `RoyalFlush` A whitebox penetration test was carried against their targets, with access to their web applications' source code on `http://git.royalflush.htb/`.
-* `SecureData` A blackbox penetration test was performed, with no further advance details or access to their web applications.
-* `VitaMedix` A mixture of blackbox and whitebox was carried against all web applications under their sub-domains.
+* `SecureData` A blackbox penetration test was performed, with no further advance details or access to their web applications. Some application code was accessed and analyzed via vulnerabilities found.
+* `VitaMedix` A mixture of blackbox and whitebox was carried against all web applications under their sub-domains. 
 
 Testing was performed remotely from a non-evasive standpoint, with the goal of uncovering as many misconfigurations and vulnerabilities as possible. Each weakness identified was documented and manually investigated to determine exploitation possibilities and escalation potential.
 
@@ -133,19 +133,59 @@ During the course of testing, the tester uncovered a total of **13** of findings
 
 Below is a high-level overview of each finding identified during the course of testing. These findings are covered in depth in the [Technical Findings Details](#technical-findings-details) section of this report.
 
-TODO: update table
-
-| Finding # | Severity Level | Finding Name                 |
-| --------- | -------------- | ---------------------------- |
-| 1.        | **High**       | _Command Injection_          |
-| 2.        | **Medium**     | _Username Enumeration_       |
-| 3.        | **Low**        | _Cookie Missing Secure Flag_ |
+| Finding # | Severity Level | Finding Name |
+|-----------|----------------|--------------|
+| 1 | **Critical** | *Blind SQL Injection in Password Reset Functionality (RoyalFlush)* |
+| 2 | **Critical** | *OS Command Injection in Service Status API Endpoint (SecureData)* |
+| 3 | **Critical** | *Server-Side JavaScript Injection via eval() (VitaMedix)* |
+| 4 | **High** | *NoSQL Injection in Email Verification Leading to Staff Account Creation (RoyalFlush)* |
+| 5 | **High** | *API Key Authentication Bypass Leading to Privilege Escalation (RoyalFlush)* |
+| 6 | **High** | *SQL Injection in Secondary Email Update (RoyalFlush)* |
+| 7 | **High** | *Insecure Deserialization Leading to Remote Code Execution (RoyalFlush)* |
+| 8 | **High** | *Hardcoded Credentials in Source Code Repository (RoyalFlush)* |
+| 9 | **High** | *Stored Cross-Site Scripting (XSS) via Log Poisoning (SecureData)* |
+| 10 | **High** | *XPath Injection in File Search Functionality (SecureData)* |
+| 11 | **High** | *SMTP Header Injection in Password Reset Functionality (VitaMedix)* |
+| 12 | **High** | *Second-Order IDOR via Session Variable Manipulation (VitaMedix)* |
+| 13 | **High** | *Hardcoded Credentials in Source Code Repository (VitaMedix)* |
 
 
 
 ### Assessment Overview and Recomendations
 
-TODO: 1 page summary of all identified vulnerabilities, as well as their respective recommended remediations.
+
+### RoyalFlush
+
+**Blind SQL Injection in Password Reset Functionality (Critical):** User input in the email parameter is concatenated directly into SQL queries, enabling attackers to extract password reset tokens and achieve account takeover of any user. Replace string-concatenated queries with parameterized queries using tuple parameters.
+
+**NoSQL Injection in Email Verification (High):** The token parameter is interpolated into a MongoDB `$where` query, allowing attackers to bypass email verification and create staff accounts without email ownership. Replace the `$where` operator with standard MongoDB query operators and cast all input to strings.
+
+**API Key Authentication Bypass (High):** Substring matching for API key validation allows bypass by embedding "key=" within unrelated parameter values, enabling unauthenticated privilege escalation to administrator. Rewrite authentication to extract parameters properly and default to denial unless valid credentials are proven.
+
+**SQL Injection in Secondary Email Update (High):** User input is concatenated into SQL queries via `string.Format()`, enabling file reads via `OPENROWSET` and database extraction through error-based techniques. Use parameterized queries with `SqlCommand.Parameters.AddWithValue()` and validate email format server-side.
+
+**Insecure Deserialization (High):** The deprecated `BinaryFormatter` class deserializes user-controlled encrypted data, enabling remote code execution via gadget chains when combined with extracted encryption keys. Remove `BinaryFormatter` entirely and encrypt/decrypt raw bytes directly without serialization.
+
+**Hardcoded Credentials in Source Code Repository (High):** Authentication secrets and database credentials committed to Git enable token forgery and direct database access. Rotate all exposed secrets immediately and implement secrets management with pre-commit scanning.
+
+### SecureData
+
+**OS Command Injection in Service Status API Endpoint (Critical):** The service parameter is passed directly to system commands without sanitization, allowing remote code execution when chained with XSS to bypass IP-based access restrictions. Implement strict allowlist validation for service names and avoid passing user input to shell commands.
+
+**Stored Cross-Site Scripting via Log Poisoning (High):** User-controlled HTTP headers are logged without sanitization and rendered using `innerHTML` in the admin panel, enabling admin session hijacking. URL-encode all user input before logging and use `textContent` instead of `innerHTML` when rendering log data.
+
+**XPath Injection in File Search Functionality (High):** User input is concatenated directly into XPath queries, allowing extraction of restricted files and their download tokens. Validate search input against an allowlist of permitted characters and implement server-side authorization checks for all file downloads.
+
+### VitaMedix
+
+**Server-Side JavaScript Injection via eval() (Critical):** User input in the greeting parameter is passed directly to `eval()`, and validation occurs inside the eval call itself, enabling arbitrary code execution before checks complete. Remove `eval()` entirely and replace with safe alternatives such as regex-based validation.
+
+**SMTP Header Injection in Password Reset Functionality (High):** CRLF characters in the email parameter allow injection of arbitrary SMTP headers including BCC, enabling attackers to intercept password reset emails for any user. Reject or encode CRLF characters in email input and verify library built-in protections are enabled.
+
+**Second-Order IDOR via Session Variable Manipulation (High):** Session variables storing file IDs are set before authorization checks complete, allowing attackers to access other users' files by not following error redirects. Set session variables only after authorization checks pass and re-validate permissions at the point of data access.
+
+**Hardcoded Credentials in Source Code Repository (High):** MySQL, CouchDB, and PiHole credentials stored in source code provide unauthorized access to backend systems and applications. Rotate all exposed credentials and load them from environment variables instead of source files.
+
 
 
 ## Findings {#findings}
@@ -166,7 +206,7 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:H/SI:H/SA:N (9.3 - Critical)
 
 #### External References
 
-
+* https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
 
 #### Description & Cause
 
@@ -279,7 +319,7 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N (8.7 - High)
 
 #### External References
 
-
+* https://cheatsheetseries.owasp.org/cheatsheets/NoSQL_Security_Cheat_Sheet.html
 
 #### Description & Cause
 
@@ -510,7 +550,7 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N (8.7 - High)
 
 #### External References
 
-
+* https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
 
 #### Description & Cause
 
@@ -631,7 +671,7 @@ CVSS:4.0/AV:N/AC:H/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:L/SI:L/SA:L (7.7 - High)
 
 #### External References
 
-
+* https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-migration-guide/
 
 #### Description & Cause
 
@@ -835,30 +875,6 @@ Exploit script: [AuthForger.py](exploits/AuthForger.py)
 #### Code Analysis
 
 
-```
-async saveSettings(settings) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      // ... other validation ...
-
-      // VULNERABLE: User input directly interpolated into eval()
-      if (
-        settings.greeting.length > 30 ||
-        eval(
-          `var specialChars = ['#', ';', '\\'', '"', '\\\\']; "${settings.greeting}".split('').some(char => specialChars.includes(char))`
-        )
-      ) {
-        reject("Invalid greeting (max 30 chars)!");
-        return;
-      }
-
-      // ... database update ...
-    } catch (e) {
-      reject(e);
-    }
-  });
-}
-```
 
 #### Patching and Remediation
 
@@ -886,7 +902,7 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:P/VC:H/VI:L/VA:L/SC:N/SI:N/SA:N (7.0 - High)
 
 #### External References
 
-
+* https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html
 
 #### Description & Cause
 
@@ -946,6 +962,7 @@ Use the captured session cookie to access the admin panel at `/admin/admin_panel
 
 #### Code Analysis
 
+Note: Despite this test being a 'blackbox', source code was obtained during testing via the XPath injection vulnerability, which extracted restricted files including application source code.
 
 
 **File: `common/session.php` (Lines 114-137)**
@@ -1440,11 +1457,11 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N (7.1 - High)
 
 #### External References
 
-
+* https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html
 
 #### Description & Cause
 
-The storage application contains a Second-Order Insecure Direct Object Reference (IDOR) vulnerability caused by a Time-of-Check to Time-of-Use (TOCTOU) flaw. The application stores a user-supplied file ID in the session before validating access permissions, and the session is only cleared if the user follows the redirect to the error page. An attacker can access arbitrary files belonging to other users by requesting a file they don't own and then directly navigating to the render page without following the error redirect.
+The storage application contains a Second-Order Insecure Direct Object Reference (IDOR) vulnerability caused by a Time-of-Check to Time-of-Use (TOCTOU) flaw. A TOCTOU flaw occurs when a security check and the subsequent use of the checked resource happen at different times, allowing an attacker to manipulate the state between the check and the use. The application stores a user-supplied file ID in the session before validating access permissions, and the session is only cleared if the user follows the redirect to the error page. An attacker can access arbitrary files belonging to other users by requesting a file they don't own and then directly navigating to the render page without following the error redirect.
 
 
 #### Security Impact
@@ -1661,10 +1678,6 @@ Each finding has been assigned a severity rating of critical, high, medium, low 
 ### Exploits {#exploits}
 
 The exploit scripts used during this penetration test are attached as files in the `exploits` directory of the submitted `zip` file.
-
-TODO: go to Notes -> Exploits and upload your exploit scripts
-
-
 
 
 
